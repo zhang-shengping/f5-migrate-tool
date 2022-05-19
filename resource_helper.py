@@ -1,0 +1,436 @@
+# coding=utf-8
+# Copyright (c) 2016-2018, F5 Networks, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+#   Unless required by applicable law or agreed to in writing, software
+#   distributed under the License is distributed on an "AS IS" BASIS,
+#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#   See the License for the specific language governing permissions and
+#   limitations under the License.
+
+from enum import Enum
+from oslo_log import log as logging
+from distutils.version import LooseVersion
+
+LOG = logging.getLogger(__name__)
+
+def get_filter(bigip, key, op, value):
+    if LooseVersion(bigip.tmos_version) < LooseVersion('11.6.0'):
+        return '$filter=%s+%s+%s' % (key, op, value)
+    else:
+        return {'$filter': '%s %s %s' % (key, op, value)}
+
+
+class ResourceType(Enum):
+    u"""Defines supported BIG-IP resource types."""
+
+    nat = 1
+    pool = 2
+    sys = 3
+    virtual = 4
+    member = 5
+    folder = 6
+    http_monitor = 7
+    https_monitor = 8
+    tcp_monitor = 9
+    ping_monitor = 10
+    node = 11
+    snat = 12
+    snatpool = 13
+    snat_translation = 14
+    selfip = 15
+    rule = 16
+    vlan = 17
+    arp = 18
+    route_domain = 19
+    tunnel = 20
+    virtual_address = 21
+    l7policy = 22
+    client_ssl_profile = 23
+    server_ssl_profile = 24
+    tcp_profile = 25
+    persistence = 26
+    cookie_persistence = 27
+    dest_addr_persistence = 28
+    hash_persistence = 29
+    msrdp_persistence = 30
+    sip_persistence = 31
+    source_addr_persistence = 32
+    ssl_persistence = 33
+    universal_persistence = 34
+    ssl_cert_file = 35
+    http_profile = 36
+    oneconnect = 37
+    udp_monitor = 38
+    sip_monitor = 39
+    diameter_monitor = 40
+    ftp_profile = 41
+    bwc_policy = 42
+    internal_data_group = 43
+    http2_profile = 44
+    websocket_profile = 45
+    route = 46
+
+
+class BigIPResourceHelper(object):
+    u"""Helper class for creating, updating and deleting BIG-IP resources.
+
+    Reduces some of the boilerplate that surrounds using the F5 SDK.
+    Example usage:
+        bigip = BigIP("10.1.1.1", "admin", "admin")
+        pool = {"name": "pool1",
+                "partition": "Common",
+                "description": "Default pool",
+                "loadBalancingMode": "round-robin"}
+        pool_helper = BigIPResourceHelper(ResourceType.pool)
+        p = pool_helper.create(bigip, pool)
+    """
+
+    def __init__(self, resource_type):
+        """Initialize a resource helper."""
+        self.resource_type = resource_type
+
+    def create(self, bigip, model):
+        u"""Create/update resource (e.g., pool) on a BIG-IP system.
+
+        First checks to see if resource has been created and creates
+        it if not.
+
+        :param bigip: BigIP instance to use for creating resource.
+        :param model: Dictionary of BIG-IP attributes to add resource. Must
+        include name and partition.
+        :returns: created or updated resource object.
+        """
+        resource = self._resource(bigip)
+        obj = resource.create(**model)
+
+        return obj
+
+    def exists(self, bigip, name=None, partition=None):
+        """Test for the existence of a resource."""
+        resource = self._resource(bigip)
+        return resource.exists(name=name, partition=partition)
+
+    def delete(self, bigip, name=None, partition=None):
+        u"""Delete a resource on a BIG-IP system.
+
+        Checks if resource exists and deletes it. Returns without error
+        if resource does not exist.
+
+        :param bigip: BigIP instance to use for creating resource.
+        :param name: Name of resource to delete.
+        :param partition: Partition name for resou
+        """
+        resource = self._resource(bigip)
+        if resource.exists(name=name, partition=partition):
+            obj = resource.load(name=name, partition=partition)
+            obj.delete()
+
+    def load(self, bigip, name=None, partition=None,
+             expand_subcollections=False):
+        u"""Retrieve a BIG-IP resource from a BIG-IP.
+
+        Populates a resource object with attributes for instance on a
+        BIG-IP system.
+
+        :param bigip: BigIP instance to use for creating resource.
+        :param name: Name of resource to load.
+        :param partition: Partition name for resource.
+        :returns: created or updated resource object.
+        """
+        resource = self._resource(bigip)
+        params = {
+            "params": {
+                "expandSubcollections": str(expand_subcollections).lower()
+            }
+        }
+        return resource.load(name=name, partition=partition,
+                             requests_params=params)
+
+    def update(self, bigip, model):
+        u"""Update a resource (e.g., pool) on a BIG-IP system.
+
+        Modifies a resource on a BIG-IP system using attributes
+        defined in the model object.
+
+        :param bigip: BigIP instance to use for creating resource.
+        :param model: Dictionary of BIG-IP attributes to update resource.
+        Must include name and partition in order to identify resource.
+        """
+        partition = None
+        if "partition" in model:
+            partition = model["partition"]
+        resource = self.load(bigip, name=model["name"], partition=partition)
+        resource.modify(**model)
+
+        return resource
+
+    def get_resources(self, bigip, partition=None,
+                      expand_subcollections=False):
+        u"""Retrieve a collection BIG-IP of resources from a BIG-IP.
+
+        Generates a list of resources objects on a BIG-IP system.
+
+        :param bigip: BigIP instance to use for creating resource.
+        :param name: Name of resource to load.
+        :param partition: Partition name for resource.
+        :returns: list of created or updated resource objects.
+        """
+        resources = []
+        try:
+            collection = self._collection(bigip)
+        except KeyError as err:
+            LOG.exception(err.message)
+            raise err
+
+        if collection:
+            params = {'params': ''}
+            if partition:
+                params['params'] = get_filter(
+                    bigip, 'partition', 'eq', partition)
+                if expand_subcollections and \
+                        isinstance(params['params'], dict):
+                    params['params']['expandSubcollections'] = 'true'
+                elif expand_subcollections:
+                    params['params'] += '&expandSubCollections=true'
+                resources = collection.get_collection(requests_params=params)
+            else:
+                resources = collection.get_collection()
+
+        return resources
+
+    def exists_in_collection(self, bigip, name, partition='Common'):
+        collection = self.get_resources(bigip, partition='Common')
+        for item in collection:
+            if item.name == name:
+                return True
+
+        return False
+
+    def _resource(self, bigip):
+        return {
+            ResourceType.nat: lambda bigip: bigip.tm.ltm.nats.nat,
+            ResourceType.pool: lambda bigip: bigip.tm.ltm.pools.pool,
+            ResourceType.sys: lambda bigip: bigip.tm.sys,
+            ResourceType.virtual: lambda bigip: bigip.tm.ltm.virtuals.virtual,
+            ResourceType.member: lambda bigip: bigip.tm.ltm.pools.pool.member,
+            ResourceType.folder: lambda bigip: bigip.tm.sys.folders.folder,
+            ResourceType.http_monitor:
+                lambda bigip: bigip.tm.ltm.monitor.https.http,
+            ResourceType.https_monitor:
+                lambda bigip: bigip.tm.ltm.monitor.https_s.https,
+            ResourceType.tcp_monitor:
+                lambda bigip: bigip.tm.ltm.monitor.tcps.tcp,
+            ResourceType.udp_monitor:
+                lambda bigip: bigip.tm.ltm.monitor.udps.udp,
+            ResourceType.sip_monitor:
+                lambda bigip: bigip.tm.ltm.monitor.sips.sip,
+            ResourceType.diameter_monitor:
+                lambda bigip: bigip.tm.ltm.monitor.diameters.diameter,
+            ResourceType.ping_monitor:
+                lambda bigip: bigip.tm.ltm.monitor.gateway_icmps.gateway_icmp,
+            ResourceType.node: lambda bigip: bigip.tm.ltm.nodes.node,
+            ResourceType.snat: lambda bigip: bigip.tm.ltm.snats.snat,
+            ResourceType.snatpool:
+                lambda bigip: bigip.tm.ltm.snatpools.snatpool,
+            ResourceType.snat_translation:
+                lambda bigip: bigip.tm.ltm.snat_translations.snat_translation,
+            ResourceType.selfip:
+                lambda bigip: bigip.tm.net.selfips.selfip,
+            ResourceType.rule:
+                lambda bigip: bigip.tm.ltm.rules.rule,
+            ResourceType.vlan:
+                lambda bigip: bigip.tm.net.vlans.vlan,
+            ResourceType.arp:
+                lambda bigip: bigip.tm.net.arps.arp,
+            ResourceType.route_domain:
+                lambda bigip: bigip.tm.net.route_domains.route_domain,
+            ResourceType.route:
+                lambda bigip: bigip.tm.net.routes.route,
+            ResourceType.tunnel:
+                lambda bigip: bigip.tm.net.tunnels.tunnels.tunnel,
+            ResourceType.virtual_address:
+                lambda bigip: bigip.tm.ltm.virtual_address_s.virtual_address,
+            ResourceType.l7policy:
+                lambda bigip: bigip.tm.ltm.policys.policy,
+            ResourceType.client_ssl_profile:
+                lambda bigip: bigip.tm.ltm.profile.client_ssls.client_ssl,
+            ResourceType.server_ssl_profile:
+                lambda bigip: bigip.tm.ltm.profile.server_ssls.server_ssl,
+            ResourceType.tcp_profile:
+                lambda bigip: bigip.tm.ltm.profile.tcps.tcp,
+            ResourceType.persistence:
+                lambda bigip: bigip.tm.ltm.persistence,
+            ResourceType.cookie_persistence:
+                lambda bigip: bigip.tm.ltm.persistence.cookies.cookie,
+            ResourceType.dest_addr_persistence:
+                lambda bigip: bigip.tm.ltm.persistence.dest_addrs.dest_addr,
+            ResourceType.hash_persistence:
+                lambda bigip: bigip.tm.ltm.persistence.hashs.hash,
+            ResourceType.msrdp_persistence:
+                lambda bigip: bigip.tm.ltm.persistence.msrdp,
+            ResourceType.sip_persistence:
+                lambda bigip: bigip.tm.ltm.persistence.sips,
+            ResourceType.source_addr_persistence:
+                lambda bigip:
+                    bigip.tm.ltm.persistence.source_addrs.source_addr,
+            ResourceType.ssl_persistence:
+                lambda bigip: bigip.tm.ltm.persistence.ssl,
+            ResourceType.universal_persistence:
+                lambda bigip: bigip.tm.ltm.persistence.universal,
+            ResourceType.http_profile:
+                lambda bigip: bigip.tm.ltm.profile.https.http,
+            ResourceType.http2_profile:
+                lambda bigip: bigip.tm.ltm.profile.http2s.http2,
+            ResourceType.ssl_cert_file:
+                lambda bigip: bigip.tm.sys.file.ssl_certs.ssl_cert,
+            ResourceType.ftp_profile:
+                lambda bigip: bigip.tm.ltm.profile.ftps.ftp,
+            ResourceType.bwc_policy:
+                lambda bigip: bigip.tm.net.bwc.policys.policy,
+            ResourceType.internal_data_group:
+                lambda bigip: bigip.tm.ltm.data_group.internals.internal,
+            ResourceType.websocket_profile:
+                lambda bigip: bigip.tm.ltm.profile.websockets.websocket
+        }[self.resource_type](bigip)
+
+    def _collection(self, bigip):
+        collection_map = {
+            ResourceType.nat: lambda bigip: bigip.tm.ltm.nats,
+            ResourceType.pool: lambda bigip: bigip.tm.ltm.pools,
+            ResourceType.sys: lambda bigip: bigip.tm.sys,
+            ResourceType.virtual: lambda bigip: bigip.tm.ltm.virtuals,
+            ResourceType.member: lambda bigip: bigip.tm.ltm.pools.pool.member,
+            ResourceType.folder: lambda bigip: bigip.tm.sys.folders,
+            ResourceType.http_monitor:
+                lambda bigip: bigip.tm.ltm.monitor.https,
+            ResourceType.https_monitor:
+                lambda bigip: bigip.tm.ltm.monitor.https_s,
+            ResourceType.tcp_monitor:
+                lambda bigip: bigip.tm.ltm.monitor.tcps,
+            ResourceType.ping_monitor:
+                lambda bigip: bigip.tm.ltm.monitor.gateway_icmps,
+            ResourceType.node: lambda bigip: bigip.tm.ltm.nodes,
+            ResourceType.snat: lambda bigip: bigip.tm.ltm.snats,
+            ResourceType.snatpool:
+                lambda bigip: bigip.tm.ltm.snatpools,
+            ResourceType.snat_translation:
+                lambda bigip: bigip.tm.ltm.snat_translations,
+            ResourceType.selfip:
+                lambda bigip: bigip.tm.net.selfips,
+            ResourceType.rule:
+                lambda bigip: bigip.tm.ltm.rules,
+            ResourceType.route_domain:
+                lambda bigip: bigip.tm.net.route_domains,
+            ResourceType.route:
+                lambda bigip: bigip.tm.net.routes,
+            ResourceType.vlan:
+                lambda bigip: bigip.tm.net.vlans,
+            ResourceType.arp:
+                lambda bigip: bigip.tm.net.arps,
+            ResourceType.tunnel:
+                lambda bigip: bigip.tm.net.tunnels.tunnels,
+            ResourceType.virtual_address:
+                lambda bigip: bigip.tm.ltm.virtual_address_s,
+            ResourceType.l7policy:
+                lambda bigip: bigip.tm.ltm.policys,
+            ResourceType.client_ssl_profile:
+                lambda bigip: bigip.tm.ltm.profile.client_ssls,
+            ResourceType.server_ssl_profile:
+                lambda bigip: bigip.tm.ltm.profile.server_ssls,
+            ResourceType.tcp_profile:
+                lambda bigip: bigip.tm.ltm.profile.tcps,
+            ResourceType.persistence:
+                lambda bigip: bigip.tm.ltm.persistence,
+            ResourceType.cookie_persistence:
+                lambda bigip: bigip.tm.ltm.persistence.cookies,
+            ResourceType.dest_addr_persistence:
+                lambda bigip: bigip.tm.ltm.persistence.dest_addrs,
+            ResourceType.hash_persistence:
+                lambda bigip: bigip.tm.ltm.persistence.hashs,
+            ResourceType.msrdp_persistence:
+                lambda bigip: bigip.tm.ltm.persistence.msrdps,
+            ResourceType.sip_persistence:
+                lambda bigip: bigip.tm.ltm.persistence.sips,
+            ResourceType.source_addr_persistence:
+                lambda bigip: bigip.tm.ltm.persistence.source_addrs,
+            ResourceType.ssl_persistence:
+                lambda bigip: bigip.tm.ltm.persistence.ssls,
+            ResourceType.universal_persistence:
+                lambda bigip: bigip.tm.ltm.persistence.universals,
+            ResourceType.ssl_cert_file:
+                lambda bigip: bigip.tm.sys.file.ssl_certs,
+            ResourceType.http_profile:
+                lambda bigip: bigip.tm.ltm.profile.https,
+            ResourceType.http2_profile:
+                lambda bigip: bigip.tm.ltm.profile.http2s,
+            ResourceType.oneconnect:
+                lambda bigip: bigip.tm.ltm.profile.one_connects,
+            ResourceType.bwc_policy:
+                lambda bigip: bigip.tm.net.bwc.policys,
+            ResourceType.websocket_profile:
+                lambda bigip: bigip.tm.ltm.profile.websockets
+        }
+
+        if self.resource_type in collection_map:
+            return collection_map[self.resource_type](bigip)
+        else:
+            LOG.error("Error attempting to get collection for "
+                      "resource %s", self.resource_type)
+            raise KeyError("No collection available for %s" %
+                           (self.resource_type))
+
+    def get_stats(self, bigip, name=None, partition=None, stat_keys=[]):
+        """Returns dictionary of stats.
+
+        Use by calling with an array of stats to get from resource. Return
+        value will be a dict with key/value pairs. The stat key will only
+        be included in the return dict if the resource includes that stat.
+
+        :param bigip: BIG-IP to get stats from.
+        :param name: name of resource object.
+        :param partition: partition where to get resource.
+        :param stat_keys: Array of strings that define stats to collect.
+        :return: dictionary with key/value pairs where key is string
+        defined in input array, if present in resource stats, and value
+        as the value of resource stats 'value' key.
+        """
+        collected_stats = {}
+
+        # get resource, then its stats
+        if self.exists(bigip, name=name, partition=partition):
+            resource = self.load(bigip, name=name, partition=partition)
+            collected_stats = self.collect_stats(resource, stat_keys)
+
+        return collected_stats
+
+    def collect_stats(self, resource, stat_keys=[]):
+        collected_stats = {}
+        resource_stats = resource.stats.load()
+        stat_entries = resource_stats.entries
+
+        # Difference between 11.6 and 12.1. Stats in 12.1 are embedded
+        # in nestedStats. In 11.6, they are directly accessible in entries.
+        if stat_keys[0] not in stat_entries:
+            # find nestedStats
+            for key in stat_entries.keys():
+                value = stat_entries.get(key, None)
+                if 'nestedStats' in value:
+                    stat_entries = value['nestedStats']['entries']
+
+        # add stats defined in input stats array
+        for stat_key in stat_keys:
+            if stat_key in stat_entries:
+                if 'value' in stat_entries[stat_key]:
+                    collected_stats[stat_key] = stat_entries[stat_key][
+                        'value']
+                elif 'description' in stat_entries[stat_key]:
+                    collected_stats[stat_key] = \
+                        stat_entries[stat_key]['description']
+
+        return collected_stats
