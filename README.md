@@ -45,7 +45,7 @@
 
 1. 此迁移必须在 SNAT IP 和 selfip 迁移完成后运行
 2. 迁移中有任何异常，需要回复备份配置重新迁移。
-3. ！！！ 迁移正确完成后，admin 用户一定要在 bigip 上执行 `tmsh save /sys config partitions all`
+3. <font 'color=red'>！！！ 迁移正确完成后，admin 用户一定要在 bigip 上执行 `tmsh save /sys config partitions all`</font>
 
 ### 运行命令：
 
