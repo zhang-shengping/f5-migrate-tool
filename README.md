@@ -45,7 +45,7 @@
 
 1. 此迁移必须在 SNAT IP 和 selfip 迁移完成后运行
 2. 迁移中有任何异常，需要回复备份配置重新迁移。
-3. <font color="red">！！！ 迁移正确完成后，admin 用户一定要在 bigip 上执行 `tmsh save /sys config partitions all`</font>
+3. <font color="red">！！！ 迁移正确完成后，admin 用户一定要在 bigip 上执行 `tmsh save /sys config`</font>
 
 ### 运行命令：
 
@@ -66,4 +66,4 @@ sudo python main.py --config-file /etc/neutron/services/f5/f5-openstack-agent.in
 具体 SNAT IP 迁移部分可以参考：https://gitswarm.f5net.com/openstack/snat-migration  
 
 
-## ！！！ 迁移正确完成后，admin 用户一定要在 bigip 上执行 tmsh save /sys config partitions all
+## ！！！ 迁移正确完成后，admin 用户一定要在 bigip 上执行 `tmsh save /sys config`
