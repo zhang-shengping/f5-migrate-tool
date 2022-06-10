@@ -303,8 +303,7 @@ for tenant_res in resource.values():
                 pprint(payload)
                 print("\n")
                 if not DRYRUN:
-                    pass
-                    # create_route(bigip, payload)
+                    create_route(bigip, payload)
 
                 # selfips need to keep
                 # get selfip for comparing with members selfip
@@ -348,8 +347,7 @@ for tenant_res in resource.values():
                 print("Deleting selfip %s on bigip %s " % (selfip_name, bigip.hostname))
                 if not DRYRUN:
                     try:
-                        # selfip.delete()
-                        pass
+                        selfip.delete()
                     except Exception as exc:
                         if 400 == exc.response.status_code:
                             if "because it would leave a route unreachable." not in exc.response.text:

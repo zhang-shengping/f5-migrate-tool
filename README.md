@@ -41,20 +41,25 @@
    2. BigIP:
       1. 会在 **Loadbalancer route domain** 下创建 member node IP 和 member 服务 IP Port。
 
-### route 迁移图示：
-
-![L3_migration.jpg](https://s2.loli.net/2022/06/10/Hbca6vJ3QhwVt27.jpg)
-
-具体 SNAT IP 迁移部分可以参考：https://gitswarm.f5net.com/openstack/snat-migration  
-
 ### 迁移注意事项：
 
 1. 此迁移必须在 SNAT IP 和 selfip 迁移完成后运行
 2. 迁移中有任何异常，需要回复备份配置重新迁移。
 
-
-### 运行命令
+### 运行命令：
 
 ```
 sudo python main.py --config-file /etc/neutron/services/f5/f5-openstack-agent.ini --config-file /etc/neutron/neutron.conf --host-ip 10.145.71.57 --f5-agent 7c6a4b8e-7d9a-40fe-b55e-c3516d24f3e9 --dry-run
+
+--config-file /etc/neutron/neutron.conf: 当前 neutron 配置文件。
+--config-file /etc/neutron/service/f5/f5-openstack-agent.ini: 当前 F5 agent provider 配置文件。
+--f5-agent 7c6a4b8e-7d9a-40fe-b55e-c3516d24f3e9: 当前 F5 agent ID。
+--host-ip 10.145.71.57: 当前 F5 agent provider 控制的其中一台 bigip host 地址，如果有多台，需要多次运行这个命令。
+--dry-run: 用于数据构建测试，注意此测试不会真正下发任何配置，不会对 Neutron DB 和 F5 BigIP 设备做任何更改。
 ```
+
+### route 迁移图示 和 迁移步骤：
+
+![L3_migration.jpg](https://s2.loli.net/2022/06/10/7kPrvlEciXKQHZR.jpg)
+
+具体 SNAT IP 迁移部分可以参考：https://gitswarm.f5net.com/openstack/snat-migration  
