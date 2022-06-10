@@ -31,9 +31,19 @@ if conf.environment_prefix:
 else:
     raise Exception("Cannot found partition prefix")
 
+def get_device_name(host, device_list):
+    if not device_list:
+        return
+    for device in device_list:
+        if host == device.managementIp:
+            return device.name
+
 def init_bigip(host, user, passwd):
     bigip = ManagementRoot(host, user, passwd)
-    device_name = bigip.tm.cm.devices.get_collection()[0].name
+    devices = bigip.tm.cm.devices.get_collection()
+    device_name = get_device_name(host, devices)
+    if not device_name:
+        raise Exception("Cannot found device name for host %s" % host)
     bigip.device_name = device_name
     return bigip
 
@@ -112,7 +122,17 @@ def get_selfip_name(bigip, subnet_id):
 
 def get_selfip(bigip, partition, selfip_name):
     selfip_helper = resource_helper.BigIPResourceHelper(resource_helper.ResourceType.selfip)
-    return selfip_helper.load(bigip, partition=partition, name=selfip_name)
+    result = None
+    try:
+        result = selfip_helper.load(bigip, partition=partition, name=selfip_name)
+    except Exception as exc:
+        if 404 == exc.response.status_code:
+            pass
+        else:
+            raise exc
+    return result
+
+
 
 def get_lb_seg_num(lb):
     segs = len(lb.subnet.network.segments)
@@ -328,7 +348,7 @@ for tenant_res in resource.values():
                 try:
                      selfip_port = neutron_client.find_resource('port', selfip_name)
                 except Exception as exc:
-                    print("selfip neutron port %s not found" % selfip_name)
+                    print("Selfip neutron port %s not found" % selfip_name)
                 if selfip_port:
                     print("Deleting selfip neutron port %s" % selfip_name)
                     if not DRYRUN:
@@ -342,21 +362,27 @@ for tenant_res in resource.values():
                                 raise exc
 
                 selfip = get_selfip(bigip, partition, selfip_name)
-                vlan = selfip.vlan
+                
+                if selfip:
+                    vlan = selfip.vlan
 
-                print("Deleting selfip %s on bigip %s " % (selfip_name, bigip.hostname))
-                if not DRYRUN:
-                    try:
-                        selfip.delete()
-                    except Exception as exc:
-                        if 400 == exc.response.status_code:
-                            if "because it would leave a route unreachable." not in exc.response.text:
+                    print("Deleting selfip %s on bigip %s " % (selfip_name, bigip.hostname))
+                    if not DRYRUN:
+                        try:
+                            selfip.delete()
+                        except Exception as exc:
+                            if 400 == exc.response.status_code:
+                                if "because it would leave a route unreachable." not in exc.response.text:
+                                    raise exc
+                            elif 404 == exc.response.status_code:
+                                pass
+                            else:
                                 raise exc
-                        else:
-                            raise exc
 
-                delete_vlan(bigip, vlan, DRYRUN)
-                delete_rd(bigip, subnet_id, partition, DRYRUN)
+                    delete_vlan(bigip, vlan, DRYRUN)
+                    delete_rd(bigip, subnet_id, partition, DRYRUN)
+                else:
+                    print("Selfip %s not found in partition %s on Bigip %s" % (selfip_name, partition, bigip.hostname))
 
         print("Finish operations for Partition %s" % partition)
         print("==============================================\n")
