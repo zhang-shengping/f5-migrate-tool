@@ -137,7 +137,7 @@ def get_selfip(bigip, partition, selfip_name):
 def get_lb_seg_num(lb):
     segs = len(lb.subnet.network.segments)
     if segs > 1:
-        for seg in segs:
+        for seg in lb.subnet.network.segments:
             if seg.network_type == "vlan":
                 segementation = seg.segmentation_id
     elif segs == 1:
@@ -362,7 +362,6 @@ for tenant_res in resource.values():
                                 raise exc
 
                 selfip = get_selfip(bigip, partition, selfip_name)
-                
                 if selfip:
                     vlan = selfip.vlan
 
